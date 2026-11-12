@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.venv/
+model/
+model.zip
+calibration.json
