@@ -5,9 +5,13 @@ let wordVerified=false;
 let state='ready',stream,ctx,source,analyser,recognition,timer,frame,attempt=0;
 let above=0,run=0,last=0,peak=-120,transcript='',hasResult=false;
 const threshold=()=>Number($('threshold').value);
-function setting(){ $('setting').textContent=`${threshold()} dBFS`;$('target').textContent=`Drempel ${threshold()} dBFS`; }
+function meterPercent(db){return Math.max(0,Math.min(100,(db+60)/60*100));}
+let history=[], historyTime=0;
+function resetMeter(){history=[];historyTime=0;$('trace').setAttribute('points','');$('live-db').textContent='—';$('peak-level').textContent='Piek: —';$('level').textContent='— dBFS';$('fill').style.width='0%';$('fill').parentElement.setAttribute('aria-valuenow',0);$('volume-label').textContent='Live tijdens stap 2';}
+function drawMeter(db,now){const pct=meterPercent(db);$('fill').style.width=pct+'%';$('fill').style.background=db>=-.1?'#ba1d30':db>threshold()?'#16744a':'#ce8b22';$('fill').parentElement.setAttribute('aria-valuenow',Math.round(pct));$('live-db').textContent=db<=-100?'−∞':db.toFixed(1);$('level').textContent=db.toFixed(1)+' dBFS';$('peak-level').textContent='Piek: '+peak.toFixed(1)+' dBFS';$('volume-label').textContent=db>=-.1?'Te luid · oversturing':db>threshold()?'Boven de testdrempel ✓':'Onder de testdrempel';if(now-historyTime>=100){historyTime=now;history.push(pct);if(history.length>60)history.shift();$('trace').setAttribute('points',history.map((v,i)=>((60-history.length+i)*300/59).toFixed(1)+','+(58-v*.56).toFixed(1)).join(' '));}}
+function setting(){ $('threshold-marker').style.left=meterPercent(threshold())+'%'; $('setting').textContent=`${threshold()} dBFS`;$('target').textContent=`Drempel ${threshold()} dBFS`; }
 $('threshold').oninput=setting;setting();
-function cleanup(){clearTimeout(timer);cancelAnimationFrame(frame);if(recognition){recognition.onend=null;recognition.onerror=null;recognition.onresult=null;try{recognition.abort();}catch{}recognition=null;}if(source)source.disconnect();source=null;stream?.getTracks().forEach(t=>t.stop());stream=null;if(ctx){ctx.close().catch(()=>{});ctx=null;}}
+function cleanup(){ $('meter-state').textContent='MICROFOON UIT · LAATSTE METING';clearTimeout(timer);cancelAnimationFrame(frame);if(recognition){recognition.onend=null;recognition.onerror=null;recognition.onresult=null;try{recognition.abort();}catch{}recognition=null;}if(source)source.disconnect();source=null;stream?.getTracks().forEach(t=>t.stop());stream=null;if(ctx){ctx.close().catch(()=>{});ctx=null;}}
 function status(s){$('status').textContent=s;}
 function gate(){if(state!=='intro')return;state='challenge';video.pause();video.currentTime=18;$('start').classList.add('hidden');$('challenge').classList.remove('hidden');$('phase').textContent='02 / ZEG HARDER';}
 function watch(){if(state!=='intro')return;if(video.currentTime>=18)gate();else requestAnimationFrame(watch);}
@@ -45,7 +49,7 @@ function listenWord(){
  }catch(e){state='challenge';cleanup();readyButton();status('Spraakherkenning kon niet starten: '+e.message);}
 }
 async function listenVolume(){
- cleanup();const id=++attempt;state='listening';above=run=0;peak=-120;last=0;
+ cleanup();resetMeter();const id=++attempt;state='listening';above=run=0;peak=-120;last=0;
  $('listen').disabled=true;$('threshold').disabled=true;status('Stap 2/2: microfoon voorbereiden…');
  timer=setTimeout(()=>{if(id!==attempt)return;state='challenge';cleanup();readyButton();status('Geen microfoontoegang ontvangen. Geef Safari toestemming en probeer opnieuw.');},15000);
  try{
@@ -55,12 +59,12 @@ async function listenVolume(){
  await ctx.resume();source=ctx.createMediaStreamSource(stream);analyser=ctx.createAnalyser();analyser.fftSize=2048;source.connect(analyser);
  const data=new Float32Array(analyser.fftSize);const track=stream.getAudioTracks()[0];
  status('Zeg nu opnieuw “Harder”, luid genoeg. Volumetest: 4 seconden.');
- function meter(now){if(id!==attempt||state!=='listening')return;analyser.getFloatTimeDomainData(data);let power=0;for(const v of data)power+=v*v;const db=20*Math.log10(Math.max(1e-6,Math.sqrt(power/data.length)));const pct=Math.max(0,Math.min(100,(db+60)/60*100));$('fill').style.width=pct+'%';$('fill').parentElement.setAttribute('aria-valuenow',Math.round(pct));$('level').textContent=db.toFixed(1)+' dBFS';peak=Math.max(peak,db);const dt=last?Math.min(70,now-last):0;run=db>threshold()?run+dt:0;above=Math.max(above,run);last=now;frame=requestAnimationFrame(meter);}
+ function meter(now){if(id!==attempt||state!=='listening')return;analyser.getFloatTimeDomainData(data);let power=0;for(const v of data)power+=v*v;const db=20*Math.log10(Math.max(1e-6,Math.sqrt(power/data.length)));peak=Math.max(peak,db);drawMeter(db,now);$('meter-state').textContent=track.muted?'MICROFOON GEDEMPT':'● LIVE MICROFOON';const dt=last?Math.min(70,now-last):0;run=db>threshold()?run+dt:0;above=Math.max(above,run);last=now;frame=requestAnimationFrame(meter);}
  frame=requestAnimationFrame(meter);clearTimeout(timer);
  timer=setTimeout(()=>{if(id!==attempt)return;const muted=track.muted;state='challenge';cleanup();readyButton();if(muted||peak < -100){status('Safari levert geen microfoongeluid. Sluit deze tab volledig, open opnieuw en sta de microfoon toe.');return;}if(above>=250&&peak<-.1){state='passed';wordVerified=false;$('title').textContent='Beide tests geslaagd';status('Woord en volume afzonderlijk getest. Tik om de video verder te spelen.');$('listen').classList.add('hidden');$('continue').classList.remove('hidden');$('phase').textContent='03 / GELUKT';}else status(peak>=-.1?'Microfoon overstuurd. Houd meer afstand en probeer stap 2 opnieuw.':'Nog te stil. Probeer stap 2 luider, of verlaag de relatieve testdrempel.');},4000);
  }catch(e){if(id!==attempt)return;state='challenge';cleanup();readyButton();status('Microfoonfout: '+e.message);}
 }
 $('listen').onclick=()=>wordVerified?listenVolume():listenWord();
-$('reset').onclick=()=>{++attempt;cleanup();wordVerified=false;$('listen').textContent='Stap 1 · herken Harder';state='ready';video.pause();video.currentTime=0;$('start').classList.remove('hidden');$('start').disabled=false;$('start').textContent='Start de ervaring →';$('challenge').classList.add('hidden');$('listen').classList.remove('hidden');$('listen').disabled=false;$('continue').classList.add('hidden');$('threshold').disabled=false;$('title').textContent='Zeg “Harder”';$('phase').textContent='01 / DE VIDEO';$('fill').style.width='0';$('heard').textContent='';status('Tik hieronder en geef toegang tot je microfoon.');};
+$('reset').onclick=()=>{++attempt;cleanup();resetMeter();$('meter-state').textContent='MICROFOON UIT';wordVerified=false;$('listen').textContent='Stap 1 · herken Harder';state='ready';video.pause();video.currentTime=0;$('start').classList.remove('hidden');$('start').disabled=false;$('start').textContent='Start de ervaring →';$('challenge').classList.add('hidden');$('listen').classList.remove('hidden');$('listen').disabled=false;$('continue').classList.add('hidden');$('threshold').disabled=false;$('title').textContent='Zeg “Harder”';$('phase').textContent='01 / DE VIDEO';$('fill').style.width='0';$('heard').textContent='';status('Tik hieronder en geef toegang tot je microfoon.');};
 document.addEventListener('visibilitychange',()=>{if(document.hidden){if(state==='listening'){++attempt;state='challenge';cleanup();readyButton();status('Test onderbroken. Houd Safari op de voorgrond en probeer opnieuw.');}video.pause();}else if(state==='intro'){$('start').disabled=false;$('start').textContent='Video hervatten →';}});
 window.addEventListener('pagehide',cleanup);
